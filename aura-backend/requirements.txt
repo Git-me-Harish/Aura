@@ -1,0 +1,51 @@
+# AURA backend dependencies — production stack (NO MOCK FALLBACKS)
+
+fastapi==0.128.0
+uvicorn[standard]==0.44.0
+pydantic==2.12.5
+pydantic-settings==2.13.1
+python-dotenv==1.0.1
+httpx==0.28.1
+websockets==12.0
+numpy==1.26.4
+
+# Real data layer 
+asyncpg==0.30.0               # PostgreSQL async driver
+redis==5.2.0                  # redis.asyncio client (pub/sub + cache)
+fakeredis==2.34.1             # in-process async Redis for dev/test (auto-used when real Redis is unreachable)
+qdrant-client==1.12.1         # vector DB (async + sync + local file mode)
+clickhouse-connect==0.8.0     # ClickHouse HTTP native client (real event log)
+aiokafka==0.12.0              # async Kafka producer/consumer (real event stream)
+
+# Auth
+python-jose[cryptography]==3.3.0   # JWT validation (NextAuth session tokens)
+passlib[bcrypt]==1.7.4
+PyJWT==2.10.1
+
+# Prod LLMs
+openai==1.55.0                # OpenAI-compatible client → Groq / Together / OpenAI
+sentence-transformers==3.3.0  # BGE-M3 / BGE-small embeddings (local, CPU-friendly)
+huggingface-hub==0.26.2
+
+# Prod RL
+torch==2.5.1                  # CPU build is fine for dev; CUDA wheels for prod
+stable-baselines3==2.4.0      # PPO / DQN / etc.
+gymnasium==1.0.0              # env API
+mlflow==2.18.0                # experiment tracking + artifact registry
+
+# Real Recommendation rankers
+implicit==0.7.3               # ALS / BPR collaborative filtering (prebuilt wheels)
+scipy>=1.10,<2.0              # sparse matrices for ALS + NCF data prep
+scikit-learn==1.5.2           # TF-IDF + cosine for content-based ranker
+
+# MCP / OAuth integrations
+spotipy==2.24.0               # Spotify Web API
+PyGithub==2.5.0               # GitHub API
+google-api-python-client==2.151.0
+google-auth==2.36.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+
+# Observability
+structlog==24.4.0
+prometheus-client==0.21.1

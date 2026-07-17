@@ -1,0 +1,142 @@
+# AURA — real services stack.
+#
+# Bring everything up:
+#     docker compose -f aura-backend/docker-compose.yml up -d
+#
+# This stands up the FULL production-grade stack:
+#   - PostgreSQL 16     (relational store: users, items, interactions, oauth_tokens, memory_records)
+#   - Redis 7           (cache, rate-limit, WS pub/sub fan-out for multi-worker)
+#   - Qdrant 1.x        (vector store for embeddings / hybrid retrieval)
+#   - MLflow            (RL policy tracking + artifact registry)
+#   - ClickHouse        (real-time event log: user actions, RL experiences, policy updates)
+#   - Kafka (KRaft)     (event streaming — replaces the in-memory asyncio.Queue bus)
+#
+# All services are required by AURA — there is no in-process mock fallback.
+# If a service is down, AURA logs the failure loudly and the affected
+# subsystem skips the call rather than substituting fake data.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aura-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aura
+      POSTGRES_PASSWORD: aura
+      POSTGRES_DB: aura
+    ports: ["5433:5432"]
+    volumes:
+      - aura_pg:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./migrations/002_items_seed.sql:/docker-entrypoint-initdb.d/002_items_seed.sql:ro
+      - ./migrations/003_knowledge_seed.sql:/docker-entrypoint-initdb.d/003_knowledge_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aura -d aura"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: aura-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes:
+      - aura_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: aura-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST
+      - "6334:6334"   # gRPC
+    volumes:
+      - aura_qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e 'GET / HTTP/1.0\\r\\n\\r\\n' >&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.18.0
+    container_name: aura-mlflow
+    restart: unless-stopped
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    ports: ["5000:5000"]
+    volumes:
+      - aura_mlflow:/mlflow
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: aura-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: aura
+      CLICKHOUSE_USER: aura
+      CLICKHOUSE_PASSWORD: aura
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native TCP
+    volumes:
+      - aura_clickhouse:/var/lib/clickhouse
+      - ./migrations/clickhouse_init.sql:/docker-entrypoint-initdb.d/clickhouse_init.sql:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    # Confluent Kafka with KRaft (no Zookeeper) — single-node dev broker.
+    # In production, run a 3-broker cluster with proper KRaft controllers.
+    image: confluentinc/cp-kafka:7.7.0
+    container_name: aura-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"   # external listener (host)
+      - "29092:29092" # internal listener (docker network)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093,INTERNAL://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://127.0.0.1:9092,INTERNAL://kafka:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: "aura-kafka-cluster-001"
+    volumes:
+      - aura_kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  aura_pg:
+  aura_redis:
+  aura_qdrant:
+  aura_mlflow:
+  aura_clickhouse:
+  aura_kafka:

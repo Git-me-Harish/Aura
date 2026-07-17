@@ -1,0 +1,54 @@
+// AURA — Prisma schema
+//
+// This is the AUTH-side database (SQLite by default for dev simplicity —
+// change DATABASE_URL to a Postgres URL for production). It is SEPARATE
+// from the FastAPI Postgres backend that holds interactions, items,
+// memory, RL experiences, etc. The two stores are intentionally split:
+//   * Auth DB   → user identity, password hashes, OAuth account links
+//   * AURA DB   → per-user behavioural data, recommendations, RL state
+//
+// The link between them is `user.id` (a cuid string) which is also the
+// `user_id` JWT claim that FastAPI uses for all per-user endpoints.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?  // null for OAuth-only accounts, set for email/password
+  timezone     String   @default("Asia/Calcutta")
+  preferredLanguage String @default("en")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts Account[]
+
+  @@map("users")
+}
+
+model Account {
+  // NextAuth.js Account model — links OAuth providers to a User.
+  id                String  @id @default(cuid())
+  userId            String
+  provider          String   // "github" | "spotify" | "google" | "credentials"
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
